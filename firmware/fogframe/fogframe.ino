@@ -29,7 +29,8 @@ static const char* IMG_URL =
     "https://raw.githubusercontent.com/chriscreguer/fogframe/main/device/frame.bin";
 
 static const uint64_t SLEEP_SECONDS  = 24ULL * 3600;   // ~daily
-static const uint32_t WIFI_TIMEOUT_MS = 30000;
+static const uint32_t WIFI_TIMEOUT_MS = 15000;          // per attempt
+static const int      WIFI_MAX_TRIES  = 6;              // then sleep till tomorrow
 // -----------------------------------------------------------------------------
 
 static const int    PANEL_W    = 1200;
@@ -86,13 +87,10 @@ static bool fetchAndPaint() {
   return true;
 }
 
-// ---- DEBUG BUILD --------------------------------------------------------
-// Scans + lists visible networks, prints failure reasons, and STAYS AWAKE
-// retrying on WiFi failure (so the USB port doesn't vanish and logs keep
-// flowing). Once WiFi connects and the frame paints, it deep-sleeps normally.
-// Set DEBUG_WIFI to 0 later for production (deep-sleep-on-failure).
-#define DEBUG_WIFI 1
-
+// On boot: scan + list visible networks (handy if WiFi ever breaks again) and
+// print disconnect reasons. Tries to connect up to WIFI_MAX_TRIES times (your
+// signal is marginal and often needs a couple attempts), then either paints and
+// sleeps, or — if it never connects — sleeps till tomorrow keeping the old image.
 static const char* wifiReason(uint8_t r) {
   switch (r) {
     case 2:   return "AUTH_EXPIRE";
@@ -143,8 +141,8 @@ void setup() {
   delay(100);
   scanAndList();
 
-  for (int attempt = 1; ; attempt++) {
-    Serial.printf("Connecting to '%s' (attempt %d)...\n", WIFI_SSID, attempt);
+  for (int attempt = 1; attempt <= WIFI_MAX_TRIES; attempt++) {
+    Serial.printf("Connecting to '%s' (attempt %d/%d)...\n", WIFI_SSID, attempt, WIFI_MAX_TRIES);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     uint32_t t0 = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_TIMEOUT_MS) delay(250);
@@ -156,14 +154,12 @@ void setup() {
       deepSleepUntilTomorrow();         // success path: sleep ~24h
     }
 
-    Serial.printf("WiFi failed (status=%d).\n", WiFi.status());
-#if DEBUG_WIFI
-    Serial.println("Staying awake; retrying in 8s (port stays alive)...");
-    delay(8000);
-#else
-    deepSleepUntilTomorrow();
-#endif
+    Serial.printf("WiFi attempt %d failed (status=%d).\n", attempt, WiFi.status());
+    if (attempt < WIFI_MAX_TRIES) { WiFi.disconnect(true); delay(4000); }
   }
+
+  Serial.println("WiFi unreachable — keeping previous image, sleeping till tomorrow.");
+  deepSleepUntilTomorrow();
 }
 
 void loop() {}
