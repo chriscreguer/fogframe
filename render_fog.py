@@ -41,6 +41,10 @@ DISCOVERY_LOG_PATH = HERE / "snapshots" / "discovery_log.npz"
 COLOR_FOG    = (70, 70, 70)    # NEUTRAL gray overlay for unexplored (no blue cast)
 FOG_OPACITY  = 0.55
 COLOR_RECENT = (210, 35, 35)   # last-30-day exploration tint
+COLOR_WATER  = (64, 110, 180)  # solid blue painted over all water (lake/river)
+# Water is detected in the base map by its teal-cyan hue and always shown blue
+# (no fog over it) — a lake reads as water regardless of "exploration".
+WATER_HUE_LO, WATER_HUE_HI, WATER_SAT_MIN = 100, 150, 25
 
 SSAA, SSAA_THRESH = 4, 20
 RECENT_DAYS = 30
@@ -141,7 +145,16 @@ def render(data_dir, out_path):
 
     if not BASE_MAP_PATH.exists():
         raise FileNotFoundError(f"Base map missing: {BASE_MAP_PATH}")
-    base = np.array(Image.open(BASE_MAP_PATH).convert("RGB"), dtype=np.float32)
+    base_img = Image.open(BASE_MAP_PATH).convert("RGB")
+    base = np.array(base_img, dtype=np.float32)
+
+    # Detect water in the base map by its teal-cyan hue (the lake + river).
+    bhsv = np.array(base_img.convert("HSV"))
+    water_mask = (
+        (bhsv[:, :, 0] >= WATER_HUE_LO) & (bhsv[:, :, 0] <= WATER_HUE_HI)
+        & (bhsv[:, :, 1] >= WATER_SAT_MIN)
+    )
+    log.info(f"Water: {int(water_mask.sum()):,} px")
 
     # Fog: dark overlay where NOT explored
     fog_alpha = (FOG_OPACITY * (1.0 - explored))[:, :, np.newaxis]
@@ -151,6 +164,9 @@ def render(data_dir, out_path):
     if recent is not None:
         a = recent[:, :, np.newaxis]
         out = out * (1.0 - a) + np.array(COLOR_RECENT, dtype=np.float32) * a
+
+    # Water is always solid blue (painted last, over the fog) — a lake is a lake.
+    out[water_mask] = np.array(COLOR_WATER, dtype=np.float32)
 
     out = np.clip(out, 0, 255).astype(np.uint8)
     out_path = Path(out_path)
