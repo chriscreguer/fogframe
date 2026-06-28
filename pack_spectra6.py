@@ -77,6 +77,7 @@ def quantize(rgb_img):
     # Boost saturation, then classify chroma on the boosted image.
     hsv = np.asarray(rgb_img.convert("HSV"), dtype=np.float32)
     hsv[:, :, 1] = np.clip(hsv[:, :, 1] * SAT_BOOST, 0, 255)
+    hue = hsv[:, :, 0]   # 0..255 (PIL); parks≈48-64, water/cyan≈112-128
     rgb = np.asarray(Image.fromarray(hsv.astype(np.uint8), mode="HSV").convert("RGB"),
                      dtype=np.float32)
 
@@ -89,16 +90,20 @@ def quantize(rgb_img):
     thresh = np.tile(_BAYER8, (H // 8 + 1, W // 8 + 1))[:H, :W]
     out = np.where(lum > thresh, 1, 0).astype(np.uint8)   # 1=WHITE, 0=BLACK
 
-    # Chromatic pixels -> nearest of GREEN (parks) or RED (recent trips/arterials).
-    # Yellow/blue are excluded: on this muted base they misfire (e.g. the green
-    # lakefront parkland was collapsing to yellow). Parkland reads green, the
-    # recent-exploration overlay reads red — both geographically meaningful.
+    # Base classification: nearest of RED (recent trips/arterials) or GREEN (parks).
+    # Yellow stays excluded (the muted base misfires green parkland to yellow).
     CHROMA_IDX = [3, 5]                                            # RED, GREEN
     chroma_pal = np.array([PALETTE[i] for i in CHROMA_IDX], dtype=np.float32)
     diff = rgb[:, :, None, :] - chroma_pal[None, None, :, :]       # (H,W,2,3)
     pick = np.argmin((diff ** 2).sum(axis=3), axis=2)             # 0..1
     nearest = np.array(CHROMA_IDX, dtype=np.uint8)[pick]          # ->3 or 5
     out[chromatic] = nearest[chromatic]
+
+    # Water override: lake/river read as teal-cyan (hue ~112-128), which sits
+    # between the green and dark-navy blue palette entries, so nearest-colour
+    # grabs green. Force the cyan band to BLUE. Parks (hue ~48-64) are untouched.
+    water = chromatic & (hue >= 96) & (hue <= 175)
+    out[water] = 4                                                 # BLUE
     return out
 
 

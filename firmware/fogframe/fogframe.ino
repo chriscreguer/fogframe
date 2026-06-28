@@ -86,27 +86,84 @@ static bool fetchAndPaint() {
   return true;
 }
 
+// ---- DEBUG BUILD --------------------------------------------------------
+// Scans + lists visible networks, prints failure reasons, and STAYS AWAKE
+// retrying on WiFi failure (so the USB port doesn't vanish and logs keep
+// flowing). Once WiFi connects and the frame paints, it deep-sleeps normally.
+// Set DEBUG_WIFI to 0 later for production (deep-sleep-on-failure).
+#define DEBUG_WIFI 1
+
+static const char* wifiReason(uint8_t r) {
+  switch (r) {
+    case 2:   return "AUTH_EXPIRE";
+    case 15:  return "4WAY_HANDSHAKE_TIMEOUT (usually WRONG PASSWORD)";
+    case 200: return "BEACON_TIMEOUT (weak/lost signal)";
+    case 201: return "NO_AP_FOUND (too weak / not in range)";
+    case 202: return "AUTH_FAIL (WRONG PASSWORD)";
+    case 203: return "ASSOC_FAIL";
+    case 204: return "HANDSHAKE_TIMEOUT (weak signal)";
+    case 205: return "CONNECTION_FAIL";
+    default:  return "(see esp_wifi_types.h)";
+  }
+}
+
+static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+    uint8_t r = info.wifi_sta_disconnected.reason;
+    Serial.printf("  [event] STA disconnected, reason=%u  %s\n", r, wifiReason(r));
+  }
+}
+
+static void scanAndList() {
+  Serial.println("Scanning for 2.4GHz networks (ESP32-S3 cannot see 5GHz)...");
+  int n = WiFi.scanNetworks();
+  Serial.printf("Found %d network(s):\n", n);
+  bool sawTarget = false;
+  for (int i = 0; i < n; i++) {
+    bool match = WiFi.SSID(i) == String(WIFI_SSID);
+    if (match) sawTarget = true;
+    Serial.printf("  %2d: '%s'%s  RSSI=%ddBm  ch=%d  enc=%d\n",
+                  i, WiFi.SSID(i).c_str(), match ? "  <-- TARGET" : "",
+                  WiFi.RSSI(i), WiFi.channel(i), (int)WiFi.encryptionType(i));
+  }
+  Serial.printf("Target SSID '%s' %s in scan.\n",
+                WIFI_SSID, sawTarget ? "FOUND" : "NOT FOUND (wrong name or 5GHz-only)");
+}
+
 void setup() {
   Serial.begin(115200);
-  delay(300);
-  Serial.println("\nfogframe waking");
+  delay(400);
+  Serial.println("\nfogframe waking (debug build)");
 
   epaper.begin();                       // allocates the 960 KB 4bpp sprite (PSRAM)
 
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_TIMEOUT_MS) delay(250);
+  WiFi.onEvent(onWiFiEvent);             // prints exact disconnect reason
+  WiFi.disconnect(true);
+  delay(100);
+  scanAndList();
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("WiFi ok: %s\n", WiFi.localIP().toString().c_str());
-    if (fetchAndPaint()) Serial.println("painted new frame");
-    else                 Serial.println("fetch failed — keeping previous image");
-  } else {
-    Serial.println("WiFi failed — keeping previous image");
+  for (int attempt = 1; ; attempt++) {
+    Serial.printf("Connecting to '%s' (attempt %d)...\n", WIFI_SSID, attempt);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_TIMEOUT_MS) delay(250);
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("WiFi ok: %s\n", WiFi.localIP().toString().c_str());
+      if (fetchAndPaint()) Serial.println("painted new frame");
+      else                 Serial.println("fetch failed — keeping previous image");
+      deepSleepUntilTomorrow();         // success path: sleep ~24h
+    }
+
+    Serial.printf("WiFi failed (status=%d).\n", WiFi.status());
+#if DEBUG_WIFI
+    Serial.println("Staying awake; retrying in 8s (port stays alive)...");
+    delay(8000);
+#else
+    deepSleepUntilTomorrow();
+#endif
   }
-
-  deepSleepUntilTomorrow();
 }
 
 void loop() {}
