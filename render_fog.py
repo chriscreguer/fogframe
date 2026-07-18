@@ -25,6 +25,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from scipy import ndimage
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
@@ -41,7 +42,13 @@ DISCOVERY_LOG_PATH = HERE / "snapshots" / "discovery_log.npz"
 COLOR_FOG    = (70, 70, 70)    # NEUTRAL gray overlay for unexplored (no blue cast)
 FOG_OPACITY  = 0.55
 COLOR_RECENT = (210, 35, 35)   # last-30-day exploration tint
-COLOR_WATER  = (64, 110, 180)  # solid blue painted over all water (lake/river)
+COLOR_WATER  = (64, 110, 180)  # water you haven't traveled
+COLOR_WATER_DONE = (255, 255, 255)  # water you have traveled (boat/kayak/ice)
+# Re-driving an already-explored street paints a few new px at the edge of the
+# old GPS swath (jitter), which read as false "recently explored" marks. Real
+# new exploration is a ~10 px swath whose core sits away from old territory:
+# require distance from pre-window area and a minimum connected-cluster size.
+FRINGE_PX, MIN_CLUSTER_PX = 3, 4
 # Water is detected in the base map by its teal-cyan hue and always shown blue
 # (no fog over it) — a lake reads as water regardless of "exploration".
 # Thresholds exclude highway fill (pale blue-gray, hue ~140-149 / sat ~25-45,
@@ -135,9 +142,14 @@ def _load_recent_mask(world_shape):
         log.warning(f"Discovery log shape {disc.shape} ≠ world {world_shape} — skipping red layer")
         return None
     cutoff = (date.today() - timedelta(days=RECENT_DAYS)).toordinal()
-    recent = ((disc > 0) & (disc >= cutoff)).astype(np.uint8)
-    log.info(f"Recent (30d): {int(recent.sum()):,} px")
-    return _ssaa(recent)
+    recent = (disc > 0) & (disc >= cutoff)
+    old = (disc > 0) & (disc < cutoff)
+    recent &= ~ndimage.binary_dilation(old, iterations=FRINGE_PX)
+    labels, _ = ndimage.label(recent)
+    sizes = np.bincount(labels.ravel())
+    recent = (labels > 0) & (sizes[labels] >= MIN_CLUSTER_PX)
+    log.info(f"Recent (30d, fringe-filtered): {int(recent.sum()):,} px")
+    return _ssaa(recent.astype(np.uint8))
 
 
 def render(data_dir, out_path):
@@ -162,13 +174,17 @@ def render(data_dir, out_path):
     fog_alpha = (FOG_OPACITY * (1.0 - explored))[:, :, np.newaxis]
     out = base * (1.0 - fog_alpha) + np.array(COLOR_FOG, dtype=np.float32) * fog_alpha
 
-    # Red recent tint
+    # Water (over the fog): blue where untraveled, white where you've been,
+    # blended by the anti-aliased explored mask for a soft boundary.
+    e = explored[:, :, np.newaxis]
+    water_color = (np.array(COLOR_WATER, dtype=np.float32) * (1.0 - e)
+                   + np.array(COLOR_WATER_DONE, dtype=np.float32) * e)
+    out = np.where(water_mask[:, :, np.newaxis], water_color, out)
+
+    # Red recent tint — after water, so newly traveled water shows red too
     if recent is not None:
         a = recent[:, :, np.newaxis]
         out = out * (1.0 - a) + np.array(COLOR_RECENT, dtype=np.float32) * a
-
-    # Water is always solid blue (painted last, over the fog) — a lake is a lake.
-    out[water_mask] = np.array(COLOR_WATER, dtype=np.float32)
 
     out = np.clip(out, 0, 255).astype(np.uint8)
     out_path = Path(out_path)
