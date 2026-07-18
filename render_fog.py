@@ -44,7 +44,9 @@ COLOR_RECENT = (210, 35, 35)   # last-30-day exploration tint
 COLOR_WATER  = (64, 110, 180)  # solid blue painted over all water (lake/river)
 # Water is detected in the base map by its teal-cyan hue and always shown blue
 # (no fog over it) — a lake reads as water regardless of "exploration".
-WATER_HUE_LO, WATER_HUE_HI, WATER_SAT_MIN = 100, 150, 25
+# Thresholds exclude highway fill (pale blue-gray, hue ~140-149 / sat ~25-45,
+# vs. real water at hue 120-139 / sat 40+) — see commit for the mask analysis.
+WATER_HUE_LO, WATER_HUE_HI, WATER_SAT_MIN = 100, 138, 40
 
 SSAA, SSAA_THRESH = 4, 20
 RECENT_DAYS = 30
