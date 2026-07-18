@@ -2,6 +2,7 @@
 .env
 dropbox.env
 dropbox_refresh.json
+firmware/fogframe/secrets.h
 
 # python
 __pycache__/

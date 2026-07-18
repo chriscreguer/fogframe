@@ -23,8 +23,7 @@
 #include <WiFiClientSecure.h>
 
 // ---- user config ------------------------------------------------------------
-static const char* WIFI_SSID = "hai :3";
-static const char* WIFI_PASS = "gotigers";
+#include "secrets.h"   // WIFI_SSID / WIFI_PASS — gitignored, see secrets.h.example
 static const char* IMG_URL =
     "https://raw.githubusercontent.com/chriscreguer/fogframe/main/device/frame.bin";
 
