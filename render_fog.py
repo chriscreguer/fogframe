@@ -40,7 +40,7 @@ BASE_MAP_PATH      = HERE / "assets" / "map_base.png"
 DISCOVERY_LOG_PATH = HERE / "snapshots" / "discovery_log.npz"
 
 COLOR_FOG    = (70, 70, 70)    # NEUTRAL gray overlay for unexplored (no blue cast)
-FOG_OPACITY  = 0.55
+FOG_OPACITY  = 0.62
 COLOR_RECENT = (210, 35, 35)   # last-30-day exploration tint
 COLOR_WATER  = (64, 110, 180)  # water you haven't traveled
 COLOR_WATER_DONE = (255, 255, 255)  # water you have traveled (boat/kayak/ice)
