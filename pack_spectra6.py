@@ -56,6 +56,8 @@ _BAYER8 = np.array([
 SAT_BOOST     = 2.4    # amplify the muted base-map colours before classifying
 SAT_THRESHOLD = 0.40   # (on boosted image) below this -> neutral black/white
 
+ROTATE_180    = True   # panel is mounted upside down relative to native orientation
+
 
 def quantize(rgb_img):
     """RGB image -> (H,W) uint8 palette indices 0..5.
@@ -130,6 +132,8 @@ def preview(indices):
 def main(in_path, bin_path, prev_path):
     img = Image.open(in_path)
     idx = quantize(img)
+    if ROTATE_180:
+        idx = np.rot90(idx, 2)
     counts = np.bincount(idx.ravel(), minlength=6)
     names = ["BLACK", "WHITE", "YELLOW", "RED", "BLUE", "GREEN"]
     total = idx.size
