@@ -99,7 +99,18 @@ def quantize(rgb_img):
     diff = rgb[:, :, None, :] - chroma_pal[None, None, :, :]       # (H,W,2,3)
     pick = np.argmin((diff ** 2).sum(axis=3), axis=2)             # 0..1
     nearest = np.array(CHROMA_IDX, dtype=np.uint8)[pick]          # ->3 or 5
-    out[chromatic] = nearest[chromatic]
+
+    # Only assign RED/GREEN within their real hue bands. Without this, any
+    # moderately-saturated warm neutral (sand, tan parking lots, beach
+    # structures) has nowhere to go but the nearest of the two and always
+    # lands on RED (nearest-colour has no "neutral" option) — e.g. Montrose
+    # Beach's tan boathouse/parking area painting solid red though it was
+    # never actually recently explored. Real trip-red is essentially always
+    # hue==0 (a flat painted overlay colour); real park green sits ~48-64.
+    red_hue = (hue <= 10) | (hue >= 245)
+    green_hue = (hue >= 45) & (hue <= 80)
+    assign = chromatic & (red_hue | green_hue)
+    out[assign] = nearest[assign]
 
     # Water override: lake/river read as teal-cyan (hue ~112-128), which sits
     # between the green and dark-navy blue palette entries, so nearest-colour
