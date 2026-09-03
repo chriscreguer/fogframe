@@ -1,7 +1,7 @@
 /*
  * fogframe — XIAO ESP32-S3 (on the Seeed EE02 board) driving a 13.3" Spectra-6
- * e-paper panel. Once a day it wakes, pulls a pre-packed 6-colour image over
- * Wi-Fi, paints it, and deep-sleeps until tomorrow.
+ * e-paper panel. On each boot it pulls a pre-packed 6-colour image over
+ * Wi-Fi, paints it, and deep-sleeps until the next reset/power cycle.
  *
  * The image (device/frame.bin) is the RAW T133A01 4bpp buffer: 1200x1600,
  * 2 px/byte, high nibble = even (left) pixel, nibble = panel colour code
@@ -13,11 +13,14 @@
  *   PSRAM:  ENABLED   (Tools -> PSRAM: "OPI PSRAM")   <-- required, 960 KB buffer
  *   Library: Seeed_GFX installed
  *
- * On any Wi-Fi/download failure it does NOT repaint, so the panel keeps
- * yesterday's image (e-paper holds without power) and simply retries tomorrow.
+ * On any Wi-Fi/download failure it does NOT repaint, so the panel keeps its
+ * previous image (e-paper holds without power) — but it does NOT give up:
+ * a failed boot wakes again on a short timer and retries, so a flaky moment
+ * can't strand a stale frame until someone unplugs the thing.
  */
 #include "driver.h"
 #include "TFT_eSPI.h"
+#include "esp_sleep.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -27,9 +30,10 @@
 static const char* IMG_URL =
     "https://raw.githubusercontent.com/chriscreguer/fogframe/main/device/frame.bin";
 
-static const uint64_t SLEEP_SECONDS  = 24ULL * 3600;   // ~daily
 static const uint32_t WIFI_TIMEOUT_MS = 15000;          // per attempt
-static const int      WIFI_MAX_TRIES  = 6;              // then sleep till tomorrow
+static const int      WIFI_MAX_TRIES  = 6;              // per boot, before retrying later
+static const uint64_t RETRY_SECONDS   = 15ULL * 60;     // wait between failed boots
+static const int      MAX_RETRIES     = 8;              // ~2h of retries, then give up
 // -----------------------------------------------------------------------------
 
 static const int    PANEL_W    = 1200;
@@ -38,10 +42,32 @@ static const size_t FRAME_BYTES = (size_t)ROW_BYTES * 1600;  // 960000
 
 EPaper epaper;
 
-static void deepSleepUntilTomorrow() {
+// Deep sleep preserves RTC memory; a real power cycle clears it. That is exactly
+// the lifetime we want for the retry budget — every plug-on starts fresh.
+RTC_DATA_ATTR static int retriesUsed = 0;
+
+static void deepSleepUntilPowerCycle() {
   WiFi.disconnect(true);
-  esp_sleep_enable_timer_wakeup(SLEEP_SECONDS * 1000000ULL);
-  Serial.printf("Sleeping %llus...\n", (unsigned long long)SLEEP_SECONDS);
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  Serial.println("Sleeping until next reset/power cycle...");
+  Serial.flush();
+  esp_deep_sleep_start();
+}
+
+// A boot that never painted leaves yesterday's frame on the panel, so sleeping
+// until the next power cycle would strand it there indefinitely. Wake again
+// shortly instead and retry, up to a bounded budget.
+static void deepSleepAndRetry() {
+  if (retriesUsed >= MAX_RETRIES) {
+    Serial.printf("Gave up after %d retries.\n", retriesUsed);
+    deepSleepUntilPowerCycle();       // does not return
+  }
+  retriesUsed++;
+  WiFi.disconnect(true);
+  esp_sleep_enable_timer_wakeup(RETRY_SECONDS * 1000000ULL);
+  Serial.printf("Retry %d/%d in %llus...\n", retriesUsed, MAX_RETRIES,
+                (unsigned long long)RETRY_SECONDS);
+  Serial.flush();
   esp_deep_sleep_start();
 }
 
@@ -89,7 +115,8 @@ static bool fetchAndPaint() {
 // On boot: scan + list visible networks (handy if WiFi ever breaks again) and
 // print disconnect reasons. Tries to connect up to WIFI_MAX_TRIES times (your
 // signal is marginal and often needs a couple attempts), then either paints and
-// sleeps, or — if it never connects — sleeps till tomorrow keeping the old image.
+// sleeps until the next power cycle, or — if it never connects — keeps the old
+// image and schedules a retry.
 static const char* wifiReason(uint8_t r) {
   switch (r) {
     case 2:   return "AUTH_EXPIRE";
@@ -130,7 +157,7 @@ static void scanAndList() {
 void setup() {
   Serial.begin(115200);
   delay(400);
-  Serial.println("\nfogframe waking (debug build)");
+  Serial.printf("\nfogframe waking (debug build), retry %d/%d\n", retriesUsed, MAX_RETRIES);
 
   epaper.begin();                       // allocates the 960 KB 4bpp sprite (PSRAM)
 
@@ -148,17 +175,20 @@ void setup() {
 
     if (WiFi.status() == WL_CONNECTED) {
       Serial.printf("WiFi ok: %s\n", WiFi.localIP().toString().c_str());
-      if (fetchAndPaint()) Serial.println("painted new frame");
-      else                 Serial.println("fetch failed — keeping previous image");
-      deepSleepUntilTomorrow();         // success path: sleep ~24h
+      if (fetchAndPaint()) {
+        Serial.println("painted new frame");
+        deepSleepUntilPowerCycle();   // does not return
+      }
+      Serial.println("fetch failed — keeping previous image");
+      deepSleepAndRetry();            // does not return
     }
 
     Serial.printf("WiFi attempt %d failed (status=%d).\n", attempt, WiFi.status());
     if (attempt < WIFI_MAX_TRIES) { WiFi.disconnect(true); delay(4000); }
   }
 
-  Serial.println("WiFi unreachable — keeping previous image, sleeping till tomorrow.");
-  deepSleepUntilTomorrow();
+  Serial.println("WiFi unreachable — keeping previous image.");
+  deepSleepAndRetry();
 }
 
 void loop() {}

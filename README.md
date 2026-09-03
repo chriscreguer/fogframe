@@ -12,7 +12,7 @@ computer required.
                                    │
                          commit device/frame.bin
                                    │
-   XIAO ESP32-S3 + EE02 board ──wake daily──▶ fetch frame.bin ─▶ paint ─▶ sleep
+   XIAO ESP32-S3 + EE02 board ──power on──▶ fetch frame.bin ─▶ paint ─▶ sleep
                                    │
                        13.3" Spectra-6 e-paper panel
 ```
@@ -59,7 +59,15 @@ Actions tab → **daily-frame** → *Run workflow*. It pulls your data, builds
 - Board: **XIAO_ESP32S3**, and set **Tools → PSRAM: OPI PSRAM** (required — the
   frame buffer is 960 KB).
 - Wi-Fi SSID/password and the image URL are at the top of the `.ino`.
-- Upload. The panel refreshes (~25–35 s) and then sleeps for ~24 h.
+- Upload. The panel refreshes (~25-35 s) and then sleeps until the next
+  reset/power cycle. Put the frame on a smart plug schedule to control refreshes.
+- If a boot can't reach Wi-Fi or the download fails, it keeps the previous image
+  and retries every 15 min (up to 8 times, then waits for the next power cycle) —
+  so a flaky moment doesn't strand a stale frame.
+
+> If the panel doesn't refresh after an upload, check **Tools → PSRAM: OPI PSRAM**
+> first. Arduino resets it on board-package updates, and without it the 960 KB
+> frame buffer can't be allocated, so the sketch boots but never paints.
 
 ## Updating the look
 Tuning knobs live in `pack_spectra6.py` (`SAT_BOOST`, `SAT_THRESHOLD`, the
